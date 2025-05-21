@@ -5,7 +5,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'dart:async';
 import 'package:shimmer/shimmer.dart';
 import 'package:animations/animations.dart';
-import 'theme.dart'; 
+import 'theme.dart';
 import 'package:logging/logging.dart';
 part 'main.g.dart';
 
@@ -20,7 +20,6 @@ class Product {
   int stock;
   @HiveField(3)
   final double price;
-
 
   Product({
     required this.id,
@@ -79,7 +78,8 @@ class Order {
   @HiveField(6)
   final String clientName;
 
-  double get total => items.fold(0, (sum, item) => sum + (item.price * item.quantity));
+  double get total =>
+      items.fold(0, (sum, item) => sum + (item.price * item.quantity));
 
   Order({
     required this.id,
@@ -166,7 +166,7 @@ class CartItem {
 }
 
 // Controllers
-
+/*
 class AuthController extends GetxController {
   final isLoggedIn = false.obs;
   final isLoading = false.obs;
@@ -331,13 +331,206 @@ class AuthController extends GetxController {
     }
   }
 }
+*/
+class AuthController extends GetxController {
+  final isLoggedIn = false.obs;
+  final isLoading = false.obs;
+  final currentUser = Rx<User?>(null);
+  final dataProvider = DataProvider();
+  final _logger = Logger('AuthController');
+  late Box authBox;
+
+  @override
+  void onInit() {
+    super.onInit();
+    ever(isLoggedIn, _handleAuthChanged);
+    _initHiveBox();
+  }
+
+  Future<void> _initHiveBox() async {
+    try {
+      authBox = await Hive.openBox('auth');
+      await initializeAuth();
+    } catch (e) {
+      _logger.severe('Failed to initialize Hive box: $e');
+    }
+  }
+
+  void _handleAuthChanged(bool loggedIn) {
+    if (!loggedIn && currentUser.value == null) {
+      Get.offAllNamed('/login');
+    }
+  }
+
+  /// Initializes authentication on app start based on Remember Me flag
+  Future<void> initializeAuth() async {
+    try {
+      isLoading.value = true;
+
+      if (!authBox.isOpen) {
+        authBox = await Hive.openBox('auth');
+      }
+
+      final savedUserData = authBox.get('userData');
+
+      if (savedUserData != null) {
+        final username = savedUserData['username'];
+        final password =
+            savedUserData['password']; // Store encrypted in production
+        final role = savedUserData['role'];
+        final rememberMe = savedUserData['rememberMe'] ?? false;
+
+        if (!rememberMe) {
+          await authBox.clear();
+          isLoading.value = false;
+          return;
+        }
+
+        // Re-authenticate the user with stored credentials
+        final user = dataProvider.authenticateUser(username, password, role);
+
+        if (user != null && user.status == 'approved') {
+          currentUser.value = user;
+          isLoggedIn.value = true;
+
+          if (user.role == 'Owner' ||
+              user.role == 'Employee' ||
+              user.role == 'Client') {
+            await dataProvider.logAttendance(user);
+          }
+
+          // Navigate to appropriate screen based on role
+          Get.offAllNamed('/${role.toLowerCase()}');
+        } else {
+          // Clear invalid stored credentials
+          await authBox.clear();
+        }
+      }
+    } catch (e) {
+      _logger.severe('Initialize auth error: $e');
+    } finally {
+      isLoading.value = false;
+    }
+  }
+
+  /// Login method with support for Remember Me
+  Future<bool> login(
+      String username, String password, String role, bool rememberMe) async {
+    try {
+      isLoading.value = true;
+      final user = dataProvider.authenticateUser(username, password, role);
+
+      if (user != null) {
+        if (user.status != 'approved') {
+          Get.snackbar(
+            'Error',
+            'Your account is pending approval or has been rejected',
+            backgroundColor: Colors.red,
+            colorText: Colors.white,
+          );
+          return false;
+        }
+
+        currentUser.value = user;
+        isLoggedIn.value = true;
+
+        // Ensure the box is open
+        if (!authBox.isOpen) {
+          authBox = await Hive.openBox('auth');
+        }
+
+        // Store credentials if Remember Me is checked
+        if (rememberMe) {
+          await authBox.put('userData', {
+            'username': username,
+            'password': password, // Encrypt this in production
+            'role': role,
+            'rememberMe': rememberMe,
+          });
+        } else {
+          // Clear any previously saved data
+          await authBox.clear();
+        }
+
+        if (role == 'Owner' || role == 'Employee') {
+          await dataProvider.logAttendance(user);
+        }
+
+        Get.offAllNamed('/${role.toLowerCase()}');
+        return true;
+      }
+
+      Get.snackbar(
+        'Error',
+        'Invalid credentials',
+        backgroundColor: Colors.red,
+        colorText: Colors.white,
+      );
+      return false;
+    } catch (e) {
+      _logger.severe('Login error: $e');
+      Get.snackbar(
+        'Error',
+        'Login failed: $e',
+        backgroundColor: Colors.red,
+        colorText: Colors.white,
+      );
+      return false;
+    } finally {
+      isLoading.value = false;
+    }
+  }
+
+  /// Logout method: clears user session and handles rememberMe logic
+  Future<void> logout() async {
+    try {
+      if (!authBox.isOpen) {
+        authBox = await Hive.openBox('auth');
+      }
+
+      final rememberMe = authBox.get('userData')?['rememberMe'] ?? false;
+
+      // Only clear saved data if Remember Me is false
+      if (!rememberMe) {
+        await authBox.clear();
+      }
+
+      // Always clear current user state regardless of rememberMe
+      currentUser.value = null;
+      isLoggedIn.value = false;
+
+      // Clear any other controller data
+      try {
+        Get.find<OrderController>().cart.clear();
+      } catch (_) {
+        // Controller might not be initialized
+      }
+
+      try {
+        Get.find<ProductController>().products.clear();
+      } catch (_) {
+        // Controller might not be initialized
+      }
+
+      await Get.offAllNamed('/login');
+    } catch (e) {
+      _logger.severe('Logout error: $e');
+      Get.snackbar(
+        'Error',
+        'Failed to logout: $e',
+        backgroundColor: Colors.red,
+        colorText: Colors.white,
+      );
+    }
+  }
+}
 
 // Data Provider
 class DataProvider {
   static final DataProvider _instance = DataProvider._internal();
   factory DataProvider() => _instance;
   DataProvider._internal();
-  
+
   // Add this field at the start of the class
   final _logger = Logger('DataProvider');
 
@@ -355,71 +548,64 @@ class DataProvider {
     Product(id: 10, name: 'Product J', stock: 40, price: 64.99),
   ];
 
-final List<User> _sampleUsers = [
+  final List<User> _sampleUsers = [
     User(
-      username: 'owner',
-      password: 'password', 
-      role: 'Owner',
-      name: 'Owner Admin',
-      status: 'approved'  // Set initial users as approved
-    ),
+        username: 'owner',
+        password: 'password',
+        role: 'Owner',
+        name: 'Owner Admin',
+        status: 'approved' // Set initial users as approved
+        ),
     User(
-      username: 'client1',
-      password: 'password',
-      role: 'Client',
-      name: 'Alice Johnson',
-      clientId: 1,
-      status: 'approved'
-    ),
+        username: 'client1',
+        password: 'password',
+        role: 'Client',
+        name: 'Alice Johnson',
+        clientId: 1,
+        status: 'approved'),
     User(
-      username: 'client2',
-      password: 'password',
-      role: 'Client',
-      name: 'Bob Smith',
-      clientId: 2,
-      status: 'approved'
-    ),
+        username: 'client2',
+        password: 'password',
+        role: 'Client',
+        name: 'Bob Smith',
+        clientId: 2,
+        status: 'approved'),
     User(
-      username: 'client3',
-      password: 'password',
-      role: 'Client',
-      name: 'Charlie Nguyen',
-      clientId: 3,
-      status: 'approved'
-    ),
+        username: 'client3',
+        password: 'password',
+        role: 'Client',
+        name: 'Charlie Nguyen',
+        clientId: 3,
+        status: 'approved'),
     User(
-      username: 'client4',
-      password: 'password',
-      role: 'Client',
-      name: 'Dana White',
-      clientId: 4,
-      status: 'approved'
-    ),
+        username: 'client4',
+        password: 'password',
+        role: 'Client',
+        name: 'Dana White',
+        clientId: 4,
+        status: 'approved'),
     User(
-      username: 'client5',
-      password: 'password',
-      role: 'Client',
-      name: 'Eva Lopez',
-      clientId: 5,
-      status: 'approved'
-    ),
+        username: 'client5',
+        password: 'password',
+        role: 'Client',
+        name: 'Eva Lopez',
+        clientId: 5,
+        status: 'approved'),
     User(
-      username: 'employee1',
-      password: 'password',
-      role: 'Employee',
-      name: 'John Doe',
-      employeeId: 1,
-      status: 'approved'
-    ),
+        username: 'employee1',
+        password: 'password',
+        role: 'Employee',
+        name: 'John Doe',
+        employeeId: 1,
+        status: 'approved'),
     User(
-      username: 'employee2',
-      password: 'password',
-      role: 'Employee',
-      name: 'Jane Smith',
-      employeeId: 2,
-      status: 'approved'
-    ),
-];
+        username: 'employee2',
+        password: 'password',
+        role: 'Employee',
+        name: 'Jane Smith',
+        employeeId: 2,
+        status: 'approved'),
+  ];
 
   // Hive box getters
   Box<Product> get productsBox => Hive.box<Product>('products');
@@ -437,7 +623,7 @@ final List<User> _sampleUsers = [
         // Clear existing data only on first run
         await usersBox.clear();
         await productsBox.clear();
-        
+
         // Add sample products
         for (var product in _sampleProducts) {
           await productsBox.put(product.id.toString(), product);
@@ -447,14 +633,14 @@ final List<User> _sampleUsers = [
         for (var user in _sampleUsers) {
           // Ensure all sample users are approved
           final approvedUser = User(
-            username: user.username,
-            password: user.password,
-            role: user.role,
-            name: user.name,
-            clientId: user.clientId,
-            employeeId: user.employeeId,
-            status: 'approved'  // Force approved status for sample users
-          );
+              username: user.username,
+              password: user.password,
+              role: user.role,
+              name: user.name,
+              clientId: user.clientId,
+              employeeId: user.employeeId,
+              status: 'approved' // Force approved status for sample users
+              );
           await usersBox.put(user.username, approvedUser);
         }
 
@@ -469,9 +655,9 @@ final List<User> _sampleUsers = [
   User? authenticateUser(String username, String password, String role) {
     try {
       return usersBox.values.firstWhere(
-        (user) => 
-            user.username == username && 
-            user.password == password && 
+        (user) =>
+            user.username == username &&
+            user.password == password &&
             user.role == role,
       );
     } catch (e) {
@@ -483,9 +669,8 @@ final List<User> _sampleUsers = [
 
   // Product methods
   bool isProductNameExists(String name) {
-    return productsBox.values.any(
-      (product) => product.name.toLowerCase() == name.toLowerCase()
-    );
+    return productsBox.values
+        .any((product) => product.name.toLowerCase() == name.toLowerCase());
   }
 
   Future<bool> addProduct(Product product) async {
@@ -522,15 +707,15 @@ final List<User> _sampleUsers = [
       // Get all products and find the key for the product to delete
       final allProducts = productsBox.values.toList();
       final index = allProducts.indexWhere((p) => p.id == productId);
-      
+
       if (index != -1) {
         // Delete using the box key
         final key = productsBox.keyAt(index);
         await productsBox.delete(key);
-        
+
         // Force refresh products list
         Get.find<ProductController>().loadProducts();
-        
+
         Get.snackbar(
           'Success',
           'Product deleted successfully',
@@ -551,14 +736,13 @@ final List<User> _sampleUsers = [
 
   List<Product> getAllProducts() {
     try {
-      return productsBox.values.toList()
-        ..sort((a, b) => b.id.compareTo(a.id));
+      return productsBox.values.toList()..sort((a, b) => b.id.compareTo(a.id));
     } catch (e) {
       _logger.severe('Error getting products: $e');
       return [];
     }
   }
-  
+
   Future<void> updateStock(int productId, int newStock) async {
     final product = productsBox.get(productId);
     if (product != null) {
@@ -589,15 +773,15 @@ final List<User> _sampleUsers = [
       // Find the order with matching ID
       final orders = ordersBox.values.toList();
       final orderIndex = orders.indexWhere((order) => order.id == orderId);
-      
+
       if (orderIndex != -1) {
         final order = orders[orderIndex];
         order.status = newStatus;
-        
+
         // Update the order in the box using its key
         final key = ordersBox.keyAt(orderIndex);
         await ordersBox.put(key, order);
-        
+
         Get.snackbar(
           'Success',
           'Order status updated successfully',
@@ -639,9 +823,7 @@ final List<User> _sampleUsers = [
   }
 
   List<User> getClients() {
-    return usersBox.values
-        .where((user) => user.role == 'Client')
-        .toList();
+    return usersBox.values.where((user) => user.role == 'Client').toList();
   }
 
   List<Order> getClientOrders(int clientId) {
@@ -657,10 +839,10 @@ final List<User> _sampleUsers = [
 class ProductController extends GetxController {
   final dataProvider = DataProvider();
   final products = <Product>[].obs;
-  
+
   // Add this field at the start of each class that needs logging
   final _logger = Logger('ProductController');
-  
+
   @override
   void onInit() {
     super.onInit();
@@ -685,7 +867,7 @@ class ProductController extends GetxController {
       stock: stock,
       price: price,
     );
-    
+
     await dataProvider.addProduct(product);
     loadProducts();
     Get.snackbar(
@@ -719,9 +901,9 @@ class OrderController extends GetxController {
   final dataProvider = DataProvider();
   final orders = <Order>[].obs;
   final cart = <CartItem>[].obs;
-  
-  double get cartTotal => 
-    cart.fold(0, (sum, item) => sum + (item.quantity * item.product.price));
+
+  double get cartTotal =>
+      cart.fold(0, (sum, item) => sum + (item.quantity * item.product.price));
 
   void addToCart(Product product) {
     final existingItem = cart.firstWhereOrNull(
@@ -755,12 +937,14 @@ class OrderController extends GetxController {
       clientId: clientId,
       clientName: clientName,
       date: DateTime.now(),
-      items: cart.map((item) => OrderItem(
-        productId: item.product.id,
-        name: item.product.name,
-        quantity: item.quantity,
-        price: item.product.price,
-      )).toList(),
+      items: cart
+          .map((item) => OrderItem(
+                productId: item.product.id,
+                name: item.product.name,
+                quantity: item.quantity,
+                price: item.product.price,
+              ))
+          .toList(),
     );
 
     await dataProvider.createOrder(order);
@@ -809,32 +993,33 @@ void main() async {
 
   // Put DataProvider instance first
   final dataProvider = Get.put(DataProvider(), permanent: true);
-  
+
   // Initialize Hive
   await initHive();
-  
+
   // Initialize other controllers
   final authController = Get.put(AuthController(), permanent: true);
   Get.put(ProductController(), permanent: true);
   Get.put(OrderController(), permanent: true);
-  
+
   // Try to restore login session
   await authController.initializeAuth();
-  
+
   runApp(const InventoryApp());
 }
 
 Future<void> initHive() async {
   await Hive.initFlutter();
-  
+
   // Register adapters
   if (!Hive.isAdapterRegistered(0)) Hive.registerAdapter(ProductAdapter());
   if (!Hive.isAdapterRegistered(1)) Hive.registerAdapter(OrderStatusAdapter());
   if (!Hive.isAdapterRegistered(2)) Hive.registerAdapter(OrderAdapter());
   if (!Hive.isAdapterRegistered(3)) Hive.registerAdapter(OrderItemAdapter());
   if (!Hive.isAdapterRegistered(4)) Hive.registerAdapter(UserAdapter());
-  if (!Hive.isAdapterRegistered(5)) Hive.registerAdapter(AttendanceLogAdapter());
-  
+  if (!Hive.isAdapterRegistered(5))
+    Hive.registerAdapter(AttendanceLogAdapter());
+
   // Open boxes
   await Hive.openBox<Product>('products');
   await Hive.openBox<Order>('orders');
@@ -866,24 +1051,24 @@ class InventoryApp extends StatelessWidget {
       initialRoute: '/login',
       getPages: [
         GetPage(
-          name: '/login', 
+          name: '/login',
           page: () => const LoginScreen(),
           transition: Transition.fadeIn,
         ),
         GetPage(
-          name: '/owner', 
+          name: '/owner',
           page: () => const OwnerDashboard(),
           transition: Transition.zoom,
           middlewares: [AuthMiddleware()],
         ),
         GetPage(
-          name: '/client', 
+          name: '/client',
           page: () => const ClientDashboard(),
           transition: Transition.zoom,
           middlewares: [AuthMiddleware()],
         ),
         GetPage(
-          name: '/employee', 
+          name: '/employee',
           page: () => const EmployeeDashboard(),
           transition: Transition.zoom,
           middlewares: [AuthMiddleware()],
@@ -898,21 +1083,65 @@ class AuthMiddleware extends GetMiddleware {
   @override
   RouteSettings? redirect(String? route) {
     final authController = Get.find<AuthController>();
-    return authController.isLoggedIn.value ? null : const RouteSettings(name: '/login');
+    return authController.isLoggedIn.value
+        ? null
+        : const RouteSettings(name: '/login');
   }
 }
 
-class LoginScreen extends GetView<AuthController> {
+class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final usernameController = TextEditingController();
-    final passwordController = TextEditingController();
-    final selectedRole = RxString('Owner');
-    final rememberMe = RxBool(false);
-    final isLoading = RxBool(false);
+  State<LoginScreen> createState() => _LoginScreenState();
+}
 
+class _LoginScreenState extends State<LoginScreen> {
+  final usernameController = TextEditingController();
+  final passwordController = TextEditingController();
+  final selectedRole = RxString('Owner');
+  final rememberMe = RxBool(false);
+  final isLoading = RxBool(false);
+
+  final AuthController controller = Get.find<AuthController>();
+
+  @override
+  void initState() {
+    super.initState();
+    // Check if there are stored credentials to pre-fill
+    _checkStoredCredentials();
+  }
+
+  Future<void> _checkStoredCredentials() async {
+    // This delays the check until after the widget is built
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        final box = await Hive.openBox('auth');
+        final userData = box.get('userData');
+
+        if (userData != null && userData['rememberMe'] == true) {
+          // Pre-fill the fields with saved data
+          usernameController.text = userData['username'] ?? '';
+          // Don't pre-fill password for security, or implement securely
+          // passwordController.text = userData['password'] ?? '';
+          selectedRole.value = userData['role'] ?? 'Owner';
+          rememberMe.value = true;
+        }
+      } catch (e) {
+        debugPrint('Error checking stored credentials: $e');
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    usernameController.dispose();
+    passwordController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       body: Center(
         child: SingleChildScrollView(
@@ -926,12 +1155,9 @@ class LoginScreen extends GetView<AuthController> {
                 children: [
                   const Text(
                     'Inventory Management',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
                   ),
-                  const SizedBox(height: 24), // Reduce spacing
+                  const SizedBox(height: 24),
                   TextField(
                     controller: usernameController,
                     decoration: const InputDecoration(
@@ -950,30 +1176,31 @@ class LoginScreen extends GetView<AuthController> {
                   ),
                   const SizedBox(height: 16),
                   Obx(() => DropdownButtonFormField<String>(
-                    value: selectedRole.value,
-                    decoration: const InputDecoration(
-                      labelText: 'Role',
-                      prefixIcon: Icon(Icons.work),
-                    ),
-                    items: ['Owner', 'Client', 'Employee']
-                        .map((role) => DropdownMenuItem(
-                              value: role,
-                              child: Text(role),
-                            ))
-                        .toList(),
-                    onChanged: (value) => selectedRole.value = value!,
-                  )),
+                        value: selectedRole.value,
+                        decoration: const InputDecoration(
+                          labelText: 'Role',
+                          prefixIcon: Icon(Icons.work),
+                        ),
+                        items: ['Owner', 'Client', 'Employee']
+                            .map((role) => DropdownMenuItem(
+                                  value: role,
+                                  child: Text(role),
+                                ))
+                            .toList(),
+                        onChanged: (value) => selectedRole.value = value!,
+                      )),
                   const SizedBox(height: 16),
                   Row(
                     children: [
                       Expanded(
                         child: Obx(() => CheckboxListTile(
-                          title: const Text('Remember Me'),
-                          value: rememberMe.value,
-                          onChanged: (value) => rememberMe.value = value!,
-                          controlAffinity: ListTileControlAffinity.leading,
-                          contentPadding: EdgeInsets.zero,
-                        )),
+                              title: const Text('Remember Me'),
+                              value: rememberMe.value,
+                              onChanged: (value) =>
+                                  rememberMe.value = value ?? false,
+                              controlAffinity: ListTileControlAffinity.leading,
+                              contentPadding: EdgeInsets.zero,
+                            )),
                       ),
                       TextButton.icon(
                         onPressed: () => _showNewUserDialog(context),
@@ -982,49 +1209,54 @@ class LoginScreen extends GetView<AuthController> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 24), // Reduce spacing
-                  SizedBox( // Wrap button in SizedBox
-                    width: double.infinity,
-                    height: 40, // Set fixed height
-                    child: Obx(() => ElevatedButton(
-                      onPressed: isLoading.value
-                          ? null
-                          : () async {
-                              if (usernameController.text.isEmpty || 
-                                  passwordController.text.isEmpty) {
-                                Get.snackbar(
-                                  'Error',
-                                  'Please enter username and password',
-                                  backgroundColor: Colors.red,
-                                  colorText: Colors.white,
-                                );
-                                return;
-                              }
-                              
-                              isLoading.value = true;
-                              try {
-                                await controller.login(
-                                  usernameController.text.trim(),
-                                  passwordController.text,
-                                  selectedRole.value,
-                                  rememberMe.value, // Pass the remember me value
-                                );
-                              } finally {
-                                isLoading.value = false;
-                              }
-                            },
-                      child: isLoading.value
-                          ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                              ),
-                            )
-                          : const Text('Login'),
-                    )),
-                  ),
+                  const SizedBox(height: 24),
+                  Obx(() => SizedBox(
+                        width: double.infinity,
+                        height: 40,
+                        child: ElevatedButton(
+                          onPressed:
+                              controller.isLoading.value || isLoading.value
+                                  ? null
+                                  : () async {
+                                      if (usernameController.text.isEmpty ||
+                                          passwordController.text.isEmpty) {
+                                        Get.snackbar(
+                                          'Error',
+                                          'Please enter username and password',
+                                          backgroundColor: Colors.red,
+                                          colorText: Colors.white,
+                                        );
+                                        return;
+                                      }
+
+                                      isLoading.value = true;
+                                      try {
+                                        final success = await controller.login(
+                                          usernameController.text.trim(),
+                                          passwordController.text,
+                                          selectedRole.value,
+                                          rememberMe.value,
+                                        );
+                                        if (!success) {
+                                          isLoading.value = false;
+                                        }
+                                      } catch (_) {
+                                        isLoading.value = false;
+                                      }
+                                    },
+                          child: controller.isLoading.value || isLoading.value
+                              ? const SizedBox(
+                                  height: 20,
+                                  width: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                        Colors.white),
+                                  ),
+                                )
+                              : const Text('Login'),
+                        ),
+                      )),
                 ],
               ),
             ),
@@ -1057,21 +1289,18 @@ class LoginScreen extends GetView<AuthController> {
                     labelText: 'Full Name',
                     prefixIcon: Icon(Icons.person),
                   ),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter your full name';
-                    }
-                    return null;
-                  },
+                  validator: (value) => (value == null || value.isEmpty)
+                      ? 'Please enter your full name'
+                      : null,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: passwordController,
+                  obscureText: true,
                   decoration: const InputDecoration(
                     labelText: 'Password',
                     prefixIcon: Icon(Icons.lock),
                   ),
-                  obscureText: true,
                   validator: (value) {
                     if (value == null || value.isEmpty) {
                       return 'Please enter a password';
@@ -1090,15 +1319,9 @@ class LoginScreen extends GetView<AuthController> {
                     prefixIcon: Icon(Icons.email),
                   ),
                   keyboardType: TextInputType.emailAddress,
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter your email';
-                    }
-                    if (!value.contains('@')) {
-                      return 'Please enter a valid email';
-                    }
-                    return null;
-                  },
+                  validator: (value) => (value == null || !value.contains('@'))
+                      ? 'Please enter a valid email'
+                      : null,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
@@ -1108,28 +1331,25 @@ class LoginScreen extends GetView<AuthController> {
                     prefixIcon: Icon(Icons.phone),
                   ),
                   keyboardType: TextInputType.phone,
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter your phone number';
-                    }
-                    return null;
-                  },
+                  validator: (value) => (value == null || value.isEmpty)
+                      ? 'Please enter your phone number'
+                      : null,
                 ),
                 const SizedBox(height: 16),
                 Obx(() => DropdownButtonFormField<String>(
-                  value: selectedRole.value,
-                  decoration: const InputDecoration(
-                    labelText: 'Role',
-                    prefixIcon: Icon(Icons.work),
-                  ),
-                  items: ['Client', 'Employee']
-                      .map((role) => DropdownMenuItem(
-                            value: role,
-                            child: Text(role),
-                          ))
-                      .toList(),
-                  onChanged: (value) => selectedRole.value = value!,
-                )),
+                      value: selectedRole.value,
+                      decoration: const InputDecoration(
+                        labelText: 'Role',
+                        prefixIcon: Icon(Icons.work),
+                      ),
+                      items: ['Client', 'Employee']
+                          .map((role) => DropdownMenuItem(
+                                value: role,
+                                child: Text(role),
+                              ))
+                          .toList(),
+                      onChanged: (value) => selectedRole.value = value!,
+                    )),
               ],
             ),
           ),
@@ -1147,13 +1367,13 @@ class LoginScreen extends GetView<AuthController> {
                   password: passwordController.text,
                   role: selectedRole.value,
                   name: nameController.text,
-                  clientId: selectedRole.value == 'Client' 
-                      ? DateTime.now().millisecondsSinceEpoch 
+                  clientId: selectedRole.value == 'Client'
+                      ? DateTime.now().millisecondsSinceEpoch
                       : null,
-                  employeeId: selectedRole.value == 'Employee' 
-                      ? DateTime.now().millisecondsSinceEpoch 
+                  employeeId: selectedRole.value == 'Employee'
+                      ? DateTime.now().millisecondsSinceEpoch
                       : null,
-                  status: 'pending', // New registrations start as pending
+                  status: 'pending',
                 );
 
                 await Get.find<DataProvider>().addClient(newUser);
@@ -1174,7 +1394,6 @@ class LoginScreen extends GetView<AuthController> {
   }
 }
 
-
 class OwnerDashboard extends StatefulWidget {
   const OwnerDashboard({super.key});
 
@@ -1182,7 +1401,8 @@ class OwnerDashboard extends StatefulWidget {
   State<OwnerDashboard> createState() => _OwnerDashboardState();
 }
 
-class _OwnerDashboardState extends State<OwnerDashboard> with SingleTickerProviderStateMixin {
+class _OwnerDashboardState extends State<OwnerDashboard>
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
   final ProductController productController = Get.find();
   final OrderController orderController = Get.find();
@@ -1258,168 +1478,167 @@ class _OwnerDashboardState extends State<OwnerDashboard> with SingleTickerProvid
 
   Widget _buildProductsTab() {
     return Obx(() => AnimationLimiter(
-      child: GridView.builder(
-        padding: const EdgeInsets.all(8),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          childAspectRatio: 0.90, // Increased height to prevent overflow
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 10,
-        ),
-        itemCount: productController.products.length,
-        itemBuilder: (context, index) {
-          final product = productController.products[index];
-          return AnimationConfiguration.staggeredGrid(
-            position: index,
-            columnCount: 2,
-            duration: const Duration(milliseconds: 500),
-            child: SlideAnimation(
-              verticalOffset: 50.0,
-              child: FadeInAnimation(
-                child: Card(
-                  elevation: 12,
-                  shadowColor: Colors.indigo.withAlpha(102),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(24),
-                  ),
-                  child: Stack(
-                    children: [
-                      Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(24),
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              Colors.indigo[400]!,
-                              Colors.indigo[800]!,
-                            ],
-                          ),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Flexible(
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(12),
-                                    color: Colors.white.withAlpha(38),
-                                  ),
-                                  child: Text(
-                                    product.name,
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.white,
-                                    ),
-                                    textAlign: TextAlign.center,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
+          child: GridView.builder(
+            padding: const EdgeInsets.all(8),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              childAspectRatio: 0.90, // Increased height to prevent overflow
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 10,
+            ),
+            itemCount: productController.products.length,
+            itemBuilder: (context, index) {
+              final product = productController.products[index];
+              return AnimationConfiguration.staggeredGrid(
+                position: index,
+                columnCount: 2,
+                duration: const Duration(milliseconds: 500),
+                child: SlideAnimation(
+                  verticalOffset: 50.0,
+                  child: FadeInAnimation(
+                    child: Card(
+                      elevation: 12,
+                      shadowColor: Colors.indigo.withAlpha(102),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: Stack(
+                        children: [
+                          Container(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(24),
+                              gradient: LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [
+                                  Colors.indigo[400]!,
+                                  Colors.indigo[800]!,
+                                ],
                               ),
-                              const SizedBox(height: 8),
-                              Text(
-                                '\$${product.price.toStringAsFixed(2)}',
-                                style: const TextStyle(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.w900,
-                                  color: Colors.white,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 14,
-                                ),
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(16),
-                                  color: Colors.white.withAlpha(51),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      Icons.inventory_2_outlined,
-                                      size: 26,
-                                      color: Colors.white.withAlpha(230),
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      'Stock: ${product.stock}',
-                                      style: TextStyle(
-                                        fontSize: 20,
-                                        color: Colors.white.withAlpha(230),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Flexible(
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(12),
+                                        color: Colors.white.withAlpha(38),
+                                      ),
+                                      child: Text(
+                                        product.name,
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.white,
+                                        ),
+                                        textAlign: TextAlign.center,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
                                       ),
                                     ),
-                                  ],
-                                ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    '\$${product.price.toStringAsFixed(2)}',
+                                    style: const TextStyle(
+                                      fontSize: 24,
+                                      fontWeight: FontWeight.w900,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 14,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(16),
+                                      color: Colors.white.withAlpha(51),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.inventory_2_outlined,
+                                          size: 26,
+                                          color: Colors.white.withAlpha(230),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          'Stock: ${product.stock}',
+                                          style: TextStyle(
+                                            fontSize: 20,
+                                            color: Colors.white.withAlpha(230),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  SizedBox(width: double.infinity, height: 20
+                                      // child: ElevatedButton.icon(
+                                      //   onPressed: () => orderController.addToCart(product),
+                                      //   icon: const Icon(Icons.add_shopping_cart, size: 16),
+                                      //   label: const Text('Add to Cart'),
+                                      //   style: ElevatedButton.styleFrom(
+                                      //     foregroundColor: Colors.indigo,
+                                      //     backgroundColor: Colors.white,
+                                      //     padding: const EdgeInsets.symmetric(
+                                      //       horizontal: 12,
+                                      //       vertical: 8,
+                                      //     ),
+                                      //     textStyle: const TextStyle(
+                                      //       fontSize: 14,
+                                      //       fontWeight: FontWeight.bold,
+                                      //     ),
+                                      //   ),
+                                      // ),
+
+                                      )
+                                ],
                               ),
-                              const SizedBox(height: 8),
-                              SizedBox(
-                                width: double.infinity,
-                                height:20
-                                // child: ElevatedButton.icon(
-                                //   onPressed: () => orderController.addToCart(product),
-                                //   icon: const Icon(Icons.add_shopping_cart, size: 16),
-                                //   label: const Text('Add to Cart'),
-                                //   style: ElevatedButton.styleFrom(
-                                //     foregroundColor: Colors.indigo,
-                                //     backgroundColor: Colors.white,
-                                //     padding: const EdgeInsets.symmetric(
-                                //       horizontal: 12,
-                                //       vertical: 8,
-                                //     ),
-                                //     textStyle: const TextStyle(
-                                //       fontSize: 14,
-                                //       fontWeight: FontWeight.bold,
-                                //     ),
-                                //   ),
-                                // ),
-                              
-                              )
-                          ],
-                          ),
-                        ),
-                      ),
-                      // Add delete button
-                      Positioned(
-                        right: 8,
-                        top: 8,
-                        child: Container(
-                          width: 32,
-                          height: 32,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.white.withAlpha(51),
-                          ),
-                          child: IconButton(
-                            padding: EdgeInsets.zero,
-                            icon: const Icon(
-                              Icons.delete_outline,
-                              size: 18,
-                              color: Colors.white,
                             ),
-                            onPressed: () => _showDeleteProductDialog(product),
                           ),
-                        ),
+                          // Add delete button
+                          Positioned(
+                            right: 8,
+                            top: 8,
+                            child: Container(
+                              width: 32,
+                              height: 32,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.white.withAlpha(51),
+                              ),
+                              child: IconButton(
+                                padding: EdgeInsets.zero,
+                                icon: const Icon(
+                                  Icons.delete_outline,
+                                  size: 18,
+                                  color: Colors.white,
+                                ),
+                                onPressed: () =>
+                                    _showDeleteProductDialog(product),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
-            ),
-            );
-          },
-        ),
-    ));
+              );
+            },
+          ),
+        ));
   }
 
   Widget _buildClientsTab() {
@@ -1491,7 +1710,7 @@ class _OwnerDashboardState extends State<OwnerDashboard> with SingleTickerProvid
                 role: 'Client',
                 name: nameController.text,
                 clientId: DateTime.now().millisecondsSinceEpoch,
-                status: 'approved',  // Add status parameter
+                status: 'approved', // Add status parameter
               );
               dataProvider.addClient(newClient);
               Get.back();
@@ -1551,7 +1770,7 @@ class _OwnerDashboardState extends State<OwnerDashboard> with SingleTickerProvid
 
   void _showClientOrders(User client) {
     final orders = dataProvider.getClientOrders(client.clientId!);
-    
+
     Get.dialog(
       AlertDialog(
         title: Text('Orders - ${client.name}'),
@@ -1590,103 +1809,102 @@ class _OwnerDashboardState extends State<OwnerDashboard> with SingleTickerProvid
 
   Widget _buildOrdersTab() {
     return Obx(() => ListView.builder(
-      itemCount: orderController.orders.length,
-      padding: const EdgeInsets.all(8),
-      itemBuilder: (context, index) {
-        final order = orderController.orders[index];
-        return Card(
-          child: ExpansionTile(
-            title: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Order #${order.id}'),
-                      Text(
-                        'Client: ${order.clientName}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                PopupMenuButton<OrderStatus>(
-                  tooltip: 'Update Status',
-                  icon: const Icon(Icons.more_vert),
-                  onSelected: (status) => 
-                      orderController.updateOrderStatus(order.id, status),
-                  itemBuilder: (context) => OrderStatus.values
-                      .where((s) => s != order.status)
-                      .map((status) => PopupMenuItem(
-                            value: status,
-                            child: Text(status.toString().split('.').last),
-                          ))
-                      .toList(),
-                ),
-                Chip(
-                  label: Text(
-                    order.status.toString().split('.').last,
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  backgroundColor: _getStatusColor(order.status),
-                ),
-              ],
-            ),
-            subtitle: Text(_formatDate(order.date)),
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+          itemCount: orderController.orders.length,
+          padding: const EdgeInsets.all(8),
+          itemBuilder: (context, index) {
+            final order = orderController.orders[index];
+            return Card(
+              child: ExpansionTile(
+                title: Row(
                   children: [
-                    const Text(
-                      'Order Items:',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Order #${order.id}'),
+                          Text(
+                            'Client: ${order.clientName}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    ...order.items.map((item) => ListTile(
-                      title: Text(item.name),
-                      subtitle: Text('Quantity: ${item.quantity}'),
-                      trailing: Text('\$${item.price.toStringAsFixed(2)}'),
-                    )),
-                    const Divider(),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    PopupMenuButton<OrderStatus>(
+                      tooltip: 'Update Status',
+                      icon: const Icon(Icons.more_vert),
+                      onSelected: (status) =>
+                          orderController.updateOrderStatus(order.id, status),
+                      itemBuilder: (context) => OrderStatus.values
+                          .where((s) => s != order.status)
+                          .map((status) => PopupMenuItem(
+                                value: status,
+                                child: Text(status.toString().split('.').last),
+                              ))
+                          .toList(),
+                    ),
+                    Chip(
+                      label: Text(
+                        order.status.toString().split('.').last,
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      backgroundColor: _getStatusColor(order.status),
+                    ),
+                  ],
+                ),
+                subtitle: Text(_formatDate(order.date)),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'Total:',
+                          'Order Items:',
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 16,
                           ),
                         ),
-                        Text(
-                          '\$${order.total.toStringAsFixed(2)}',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                            color: Colors.green,
-                          ),
+                        const SizedBox(height: 8),
+                        ...order.items.map((item) => ListTile(
+                              title: Text(item.name),
+                              subtitle: Text('Quantity: ${item.quantity}'),
+                              trailing:
+                                  Text('\$${item.price.toStringAsFixed(2)}'),
+                            )),
+                        const Divider(),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'Total:',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                            Text(
+                              '\$${order.total.toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                                color: Colors.green,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
-          ),
-        );
-      },
-    ));
+            );
+          },
+        ));
   }
-
- 
 
   Widget _buildAttendanceTab() {
     final attendanceLogs = DataProvider().getAttendanceLogs();
@@ -1763,7 +1981,8 @@ class _OwnerDashboardState extends State<OwnerDashboard> with SingleTickerProvid
               TextFormField(
                 controller: priceController,
                 decoration: const InputDecoration(labelText: 'Price'),
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
                 validator: (value) {
                   if (value == null || value.isEmpty) {
                     return 'Please enter price';
@@ -1795,7 +2014,7 @@ class _OwnerDashboardState extends State<OwnerDashboard> with SingleTickerProvid
                   stock: stock,
                   price: price,
                 );
-                
+
                 final success = await dataProvider.addProduct(product);
                 if (success) {
                   Get.back();
@@ -1819,12 +2038,12 @@ class _OwnerDashboardState extends State<OwnerDashboard> with SingleTickerProvid
     return status.toColor;
   }
 
-String _formatDate(DateTime dateTime) {
-  final hour = dateTime.hour.toString().padLeft(2, '0');
-  final minute = dateTime.minute.toString().padLeft(2, '0');
-  final second = dateTime.second.toString().padLeft(2, '0');
-  return '${dateTime.month}/${dateTime.day}/${dateTime.year} $hour:$minute:$second';
-}
+  String _formatDate(DateTime dateTime) {
+    final hour = dateTime.hour.toString().padLeft(2, '0');
+    final minute = dateTime.minute.toString().padLeft(2, '0');
+    final second = dateTime.second.toString().padLeft(2, '0');
+    return '${dateTime.month}/${dateTime.day}/${dateTime.year} $hour:$minute:$second';
+  }
 
   @override
   void dispose() {
@@ -1836,9 +2055,8 @@ String _formatDate(DateTime dateTime) {
     return ValueListenableBuilder(
       valueListenable: dataProvider.usersBox.listenable(),
       builder: (context, Box<User> box, _) {
-        final pendingUsers = box.values
-            .where((user) => user.status == 'pending')
-            .toList();
+        final pendingUsers =
+            box.values.where((user) => user.status == 'pending').toList();
 
         if (pendingUsers.isEmpty) {
           return const Center(
@@ -1936,7 +2154,6 @@ String _formatDate(DateTime dateTime) {
   }
 }
 
-
 class ClientDashboard extends StatefulWidget {
   const ClientDashboard({super.key});
 
@@ -1944,7 +2161,8 @@ class ClientDashboard extends StatefulWidget {
   State<ClientDashboard> createState() => _ClientDashboardState();
 }
 
-class _ClientDashboardState extends State<ClientDashboard> with SingleTickerProviderStateMixin {
+class _ClientDashboardState extends State<ClientDashboard>
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
   final ProductController productController = Get.find();
   final OrderController orderController = Get.find();
@@ -1953,17 +2171,17 @@ class _ClientDashboardState extends State<ClientDashboard> with SingleTickerProv
 
   // Add this field at the start of each class that needs logging
   final _logger = Logger('ClientDashboard');
-    Color _getStatusColor(OrderStatus status) {
+  Color _getStatusColor(OrderStatus status) {
     return status.toColor;
   }
 
-String _formatDate(DateTime dateTime) {
-  final hour = dateTime.hour.toString().padLeft(2, '0');
-  final minute = dateTime.minute.toString().padLeft(2, '0');
-  final second = dateTime.second.toString().padLeft(2, '0');
-  return '${dateTime.month}/${dateTime.day}/${dateTime.year} $hour:$minute:$second';
-}
-  
+  String _formatDate(DateTime dateTime) {
+    final hour = dateTime.hour.toString().padLeft(2, '0');
+    final minute = dateTime.minute.toString().padLeft(2, '0');
+    final second = dateTime.second.toString().padLeft(2, '0');
+    return '${dateTime.month}/${dateTime.day}/${dateTime.year} $hour:$minute:$second';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1976,7 +2194,8 @@ String _formatDate(DateTime dateTime) {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Welcome, ${authController.currentUser.value?.name ?? "Client"}'),
+        title: Text(
+            'Welcome, ${authController.currentUser.value?.name ?? "Client"}'),
         actions: [
           IconButton(
             icon: const Icon(Icons.shopping_cart),
@@ -2007,321 +2226,316 @@ String _formatDate(DateTime dateTime) {
 
   Widget _buildProductsTab() {
     return Obx(() => AnimationLimiter(
-      child: GridView.builder(
-        padding: const EdgeInsets.all(8),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          childAspectRatio: 0.70, // Increased height to prevent overflow
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 10,
-        ),
-        itemCount: productController.products.length,
-        itemBuilder: (context, index) {
-          final product = productController.products[index];
-          return AnimationConfiguration.staggeredGrid(
-            position: index,
-            columnCount: 2,
-            duration: const Duration(milliseconds: 500),
-            child: SlideAnimation(
-              verticalOffset: 50.0,
-              child: FadeInAnimation(
-                child: Card(
-                  elevation: 12,
-                  shadowColor: Colors.indigo.withAlpha(102),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(24),
-                  ),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(24),
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [
-                          Colors.indigo[400]!,
-                          Colors.indigo[800]!,
-                        ],
+          child: GridView.builder(
+            padding: const EdgeInsets.all(8),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              childAspectRatio: 0.70, // Increased height to prevent overflow
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 10,
+            ),
+            itemCount: productController.products.length,
+            itemBuilder: (context, index) {
+              final product = productController.products[index];
+              return AnimationConfiguration.staggeredGrid(
+                  position: index,
+                  columnCount: 2,
+                  duration: const Duration(milliseconds: 500),
+                  child: SlideAnimation(
+                    verticalOffset: 50.0,
+                    child: FadeInAnimation(
+                      child: Card(
+                        elevation: 12,
+                        shadowColor: Colors.indigo.withAlpha(102),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        child: Container(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(24),
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                Colors.indigo[400]!,
+                                Colors.indigo[800]!,
+                              ],
+                            ),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Flexible(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 14,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(12),
+                                      color: Colors.white.withAlpha(38),
+                                    ),
+                                    child: Text(
+                                      product.name,
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
+                                      textAlign: TextAlign.center,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 48),
+                                Text(
+                                  '\$${product.price.toStringAsFixed(2)}',
+                                  style: const TextStyle(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.w900,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                const SizedBox(height: 20),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: ElevatedButton.icon(
+                                    onPressed: () =>
+                                        orderController.addToCart(product),
+                                    icon: const Icon(Icons.add_shopping_cart,
+                                        size: 16),
+                                    label: const Text('Add to Cart'),
+                                    style: ElevatedButton.styleFrom(
+                                      foregroundColor: Colors.indigo,
+                                      backgroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 8,
+                                      ),
+                                      textStyle: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                       ),
                     ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Flexible(
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 14,
-                              ),
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(12),
-                                color: Colors.white.withAlpha(38),
-                              ),
-                              child: Text(
-                                product.name,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                ),
-                                textAlign: TextAlign.center,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height:48),
-                          Text(
-                            '\$${product.price.toStringAsFixed(2)}',
-                            style: const TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.w900,
-                              color: Colors.white,
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                          SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton.icon(
-                              onPressed: () => orderController.addToCart(product),
-                              icon: const Icon(Icons.add_shopping_cart, size: 16),
-                              label: const Text('Add to Cart'),
-                              style: ElevatedButton.styleFrom(
-                                foregroundColor: Colors.indigo,
-                                backgroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 8,
-                                ),
-                                textStyle: const TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            )
-            );
-          },
-        ),
-    ));
+                  ));
+            },
+          ),
+        ));
   }
-  
 
   Widget _buildOrdersTab() {
     return Obx(() => ListView.builder(
-      itemCount: orderController.orders.length,
-      padding: const EdgeInsets.all(8),
-      itemBuilder: (context, index) {
-        final order = orderController.orders[index];
-        return Card(
-          child: ExpansionTile(
-            title: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Order #${order.id}'),
-                      Text(
-                        'Date: ${_formatDate(order.date)}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                PopupMenuButton<OrderStatus>(
-                  tooltip: 'Update Status',
-                  icon: const Icon(Icons.more_vert),
-                  onSelected: (status) => 
-                      orderController.updateOrderStatus(order.id, status),
-                  itemBuilder: (context) => OrderStatus.values
-                      .where((s) => s != order.status)
-                      .map((status) => PopupMenuItem(
-                            value: status,
-                            child: Text(status.toString().split('.').last),
-                          ))
-                      .toList(),
-                ),
-                Chip(
-                  label: Text(
-                    order.status.toString().split('.').last,
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  backgroundColor: _getStatusColor(order.status),
-                ),
-              ],
-            ),
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+          itemCount: orderController.orders.length,
+          padding: const EdgeInsets.all(8),
+          itemBuilder: (context, index) {
+            final order = orderController.orders[index];
+            return Card(
+              child: ExpansionTile(
+                title: Row(
                   children: [
-                    const Text(
-                      'Order Items:',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Order #${order.id}'),
+                          Text(
+                            'Date: ${_formatDate(order.date)}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    ...order.items.map((item) => ListTile(
-                      title: Text(item.name),
-                      subtitle: Text('Quantity: ${item.quantity}'),
-                      trailing: Text('\$${item.price.toStringAsFixed(2)}'),
-                    )),
-                    const Divider(),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    PopupMenuButton<OrderStatus>(
+                      tooltip: 'Update Status',
+                      icon: const Icon(Icons.more_vert),
+                      onSelected: (status) =>
+                          orderController.updateOrderStatus(order.id, status),
+                      itemBuilder: (context) => OrderStatus.values
+                          .where((s) => s != order.status)
+                          .map((status) => PopupMenuItem(
+                                value: status,
+                                child: Text(status.toString().split('.').last),
+                              ))
+                          .toList(),
+                    ),
+                    Chip(
+                      label: Text(
+                        order.status.toString().split('.').last,
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      backgroundColor: _getStatusColor(order.status),
+                    ),
+                  ],
+                ),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'Total:',
+                          'Order Items:',
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 16,
                           ),
                         ),
-                        Text(
-                          '\$${order.total.toStringAsFixed(2)}',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                            color: Colors.green,
-                          ),
+                        const SizedBox(height: 8),
+                        ...order.items.map((item) => ListTile(
+                              title: Text(item.name),
+                              subtitle: Text('Quantity: ${item.quantity}'),
+                              trailing:
+                                  Text('\$${item.price.toStringAsFixed(2)}'),
+                            )),
+                        const Divider(),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'Total:',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                            Text(
+                              '\$${order.total.toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                                color: Colors.green,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    ));
-  }
-  
-
-  void _showCart() {
-  Get.dialog(
-    AlertDialog(
-      title: const Text('Shopping Cart'),
-      content: Obx(() {
-        if (orderController.cart.isEmpty) {
-          return const Text('Your cart is empty');
-        }
-        return SizedBox(
-          width: double.maxFinite,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Flexible(
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: orderController.cart.length,
-                  itemBuilder: (context, index) {
-                    final item = orderController.cart[index];
-                    return ListTile(
-                      title: Text(item.product.name),
-                      subtitle: Text('\$${item.product.price.toStringAsFixed(2)}'),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.remove),
-                            onPressed: () {
-                              if (item.quantity > 1) {
-                                orderController.updateCartItemQuantity(
-                                    index, item.quantity - 1);
-                              }
-                            },
-                          ),
-                          Text('${item.quantity}'),
-                          IconButton(
-                            icon: const Icon(Icons.add),
-                            onPressed: () {
-                              orderController.updateCartItemQuantity(
-                                  index, item.quantity + 1);
-                            },
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.delete),
-                            onPressed: () =>
-                                orderController.removeFromCart(index),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ),
-              const Divider(),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    'Total:',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  Text(
-                    '\$${orderController.cartTotal.toStringAsFixed(2)}',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: Colors.green,
                     ),
                   ),
                 ],
               ),
-            ],
-          ),
-        );
-      }),
-      actions: [
-        TextButton(
-          onPressed: () => Get.back(),
-          child: const Text('CLOSE'),
-        ),
-        ElevatedButton(
-          onPressed: () {
-            if (orderController.cart.isEmpty) return;
-            final user = authController.currentUser.value;
-            if (user != null) {
-              orderController.placeOrder(
-                user.clientId!,
-                user.name,
-              );
-              Get.back();
-              Get.snackbar(
-                'Success',
-                'Order placed successfully',
-                backgroundColor: Colors.green,
-                colorText: Colors.white,
-              );
-            }
+            );
           },
-          child: const Text('PLACE ORDER'),
-          
-        ),
-        
-      ],
-      
-    ),
-    
-  );
-  
-}
+        ));
+  }
 
+  void _showCart() {
+    Get.dialog(
+      AlertDialog(
+        title: const Text('Shopping Cart'),
+        content: Obx(() {
+          if (orderController.cart.isEmpty) {
+            return const Text('Your cart is empty');
+          }
+          return SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: orderController.cart.length,
+                    itemBuilder: (context, index) {
+                      final item = orderController.cart[index];
+                      return ListTile(
+                        title: Text(item.product.name),
+                        subtitle:
+                            Text('\$${item.product.price.toStringAsFixed(2)}'),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.remove),
+                              onPressed: () {
+                                if (item.quantity > 1) {
+                                  orderController.updateCartItemQuantity(
+                                      index, item.quantity - 1);
+                                }
+                              },
+                            ),
+                            Text('${item.quantity}'),
+                            IconButton(
+                              icon: const Icon(Icons.add),
+                              onPressed: () {
+                                orderController.updateCartItemQuantity(
+                                    index, item.quantity + 1);
+                              },
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete),
+                              onPressed: () =>
+                                  orderController.removeFromCart(index),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const Divider(),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Total:',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      '\$${orderController.cartTotal.toStringAsFixed(2)}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        }),
+        actions: [
+          TextButton(
+            onPressed: () => Get.back(),
+            child: const Text('CLOSE'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (orderController.cart.isEmpty) return;
+              final user = authController.currentUser.value;
+              if (user != null) {
+                orderController.placeOrder(
+                  user.clientId!,
+                  user.name,
+                );
+                Get.back();
+                Get.snackbar(
+                  'Success',
+                  'Order placed successfully',
+                  backgroundColor: Colors.green,
+                  colorText: Colors.white,
+                );
+              }
+            },
+            child: const Text('PLACE ORDER'),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class EmployeeDashboard extends StatefulWidget {
@@ -2345,7 +2559,8 @@ class _EmployeeDashboardState extends State<EmployeeDashboard> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Welcome, ${authController.currentUser.value?.name ?? "Employee"}'),
+        title: Text(
+            'Welcome, ${authController.currentUser.value?.name ?? "Employee"}'),
         actions: [
           IconButton(
             icon: const Icon(Icons.logout),
@@ -2359,99 +2574,100 @@ class _EmployeeDashboardState extends State<EmployeeDashboard> {
 
   Widget _buildOrdersList() {
     return Obx(() => ListView.builder(
-      itemCount: orderController.orders.length,
-      padding: const EdgeInsets.all(8),
-      itemBuilder: (context, index) {
-        final order = orderController.orders[index];
-        return Card(
-          child: ExpansionTile(
-            title: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Order #${order.id}'),
-                      Text(
-                        'Date: ${_formatDate(order.date)}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                PopupMenuButton<OrderStatus>(
-                  tooltip: 'Update Status',
-                  icon: const Icon(Icons.more_vert),
-                  onSelected: (status) => 
-                      orderController.updateOrderStatus(order.id, status),
-                  itemBuilder: (context) => OrderStatus.values
-                      .where((s) => s != order.status)
-                      .map((status) => PopupMenuItem(
-                            value: status,
-                            child: Text(status.toString().split('.').last),
-                          ))
-                      .toList(),
-                ),
-                Chip(
-                  label: Text(
-                    order.status.toString().split('.').last,
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  backgroundColor: _getStatusColor(order.status),
-                ),
-              ],
-            ),
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+          itemCount: orderController.orders.length,
+          padding: const EdgeInsets.all(8),
+          itemBuilder: (context, index) {
+            final order = orderController.orders[index];
+            return Card(
+              child: ExpansionTile(
+                title: Row(
                   children: [
-                    const Text(
-                      'Order Items:',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Order #${order.id}'),
+                          Text(
+                            'Date: ${_formatDate(order.date)}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    ...order.items.map((item) => ListTile(
-                      title: Text(item.name),
-                      subtitle: Text('Quantity: ${item.quantity}'),
-                      trailing: Text('\$${item.price.toStringAsFixed(2)}'),
-                    )),
-                    const Divider(),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    PopupMenuButton<OrderStatus>(
+                      tooltip: 'Update Status',
+                      icon: const Icon(Icons.more_vert),
+                      onSelected: (status) =>
+                          orderController.updateOrderStatus(order.id, status),
+                      itemBuilder: (context) => OrderStatus.values
+                          .where((s) => s != order.status)
+                          .map((status) => PopupMenuItem(
+                                value: status,
+                                child: Text(status.toString().split('.').last),
+                              ))
+                          .toList(),
+                    ),
+                    Chip(
+                      label: Text(
+                        order.status.toString().split('.').last,
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      backgroundColor: _getStatusColor(order.status),
+                    ),
+                  ],
+                ),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'Total:',
+                          'Order Items:',
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
                             fontSize: 16,
                           ),
                         ),
-                        Text(
-                          '\$${order.total.toStringAsFixed(2)}',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                            color: Colors.green,
-                          ),
+                        const SizedBox(height: 8),
+                        ...order.items.map((item) => ListTile(
+                              title: Text(item.name),
+                              subtitle: Text('Quantity: ${item.quantity}'),
+                              trailing:
+                                  Text('\$${item.price.toStringAsFixed(2)}'),
+                            )),
+                        const Divider(),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'Total:',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                            Text(
+                              '\$${order.total.toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                                color: Colors.green,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
-          ),
-        );
-      },
-    ));
+            );
+          },
+        ));
   }
 
   Color _getStatusColor(OrderStatus status) {
