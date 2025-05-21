@@ -4,10 +4,9 @@ import 'package:get/get.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'dart:async';
 import 'package:shimmer/shimmer.dart';
-// import 'package:animations/animations.dart';
+import 'package:animations/animations.dart';
 import 'theme.dart'; 
 import 'package:logging/logging.dart';
-
 part 'main.g.dart';
 
 // Models
@@ -167,22 +166,29 @@ class CartItem {
 }
 
 // Controllers
+
 class AuthController extends GetxController {
   final isLoggedIn = false.obs;
   final isLoading = false.obs;
   final currentUser = Rx<User?>(null);
   final dataProvider = DataProvider();
-
-  // Add this field at the start of each class that needs logging
   final _logger = Logger('AuthController');
 
   @override
   void onInit() {
     super.onInit();
-    _loadSavedUser();
+    ever(isLoggedIn, _handleAuthChanged);
+    // _loadSavedUser();
   }
 
-  Future<void> _loadSavedUser() async {
+  void _handleAuthChanged(bool loggedIn) {
+    if (!loggedIn) {
+      Get.offAllNamed('/login');
+    }
+  }
+
+  // New method to initialize auth state
+  Future<void> initializeAuth() async {
     try {
       final box = await Hive.openBox('auth');
       final savedUserData = box.get('userData');
@@ -195,6 +201,44 @@ class AuthController extends GetxController {
         if (user != null && user.role == role) {
           currentUser.value = user;
           isLoggedIn.value = true;
+          
+          // Log attendance for Owner and Employee on auto-login
+          if (user.role == 'Owner' || user.role == 'Employee') {
+            await dataProvider.logAttendance(user);
+          }
+        }
+      }
+    } catch (e) {
+      _logger.severe('Initialize auth error: $e');
+    }
+  }
+
+  Future<void> _loadSavedUser() async {
+    try {
+      final box = await Hive.openBox('auth');
+      final savedUserData = box.get('userData');
+      
+      if (savedUserData != null) {
+        final username = savedUserData['username'];
+        final role = savedUserData['role'];
+        final rememberMe = savedUserData['rememberMe'] ?? false;
+        
+        // Remove this check to maintain login state regardless of rememberMe
+        // if (!rememberMe) {
+        //   await box.clear();
+        //   return;
+        // }
+        
+        final user = dataProvider.getUserByUsername(username);
+        if (user != null && user.role == role) {
+          currentUser.value = user;
+          isLoggedIn.value = true;
+          
+          // Log attendance for Owner and Employee on auto-login
+          if (user.role == 'Owner' || user.role == 'Employee') {
+            await dataProvider.logAttendance(user);
+          }
+          
           Get.offAllNamed('/${role.toLowerCase()}');
         }
       }
@@ -203,9 +247,12 @@ class AuthController extends GetxController {
     }
   }
 
+  // Update login method to always save credentials
   Future<bool> login(String username, String password, String role, bool rememberMe) async {
     try {
+      isLoading.value = true;
       final user = dataProvider.authenticateUser(username, password, role);
+      
       if (user != null) {
         if (user.status != 'approved') {
           Get.snackbar(
@@ -220,7 +267,7 @@ class AuthController extends GetxController {
         currentUser.value = user;
         isLoggedIn.value = true;
 
-        // Save user data
+        // Always save user data
         final box = await Hive.openBox('auth');
         await box.put('userData', {
           'username': username,
@@ -232,7 +279,6 @@ class AuthController extends GetxController {
           await dataProvider.logAttendance(user);
         }
 
-        // Navigate to appropriate dashboard
         Get.offAllNamed('/${role.toLowerCase()}');
         return true;
       }
@@ -607,6 +653,7 @@ final List<User> _sampleUsers = [
 }
 
 // Product Controller
+
 class ProductController extends GetxController {
   final dataProvider = DataProvider();
   final products = <Product>[].obs;
@@ -759,15 +806,20 @@ class OrderController extends GetxController {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Put DataProvider instance first
+  final dataProvider = Get.put(DataProvider(), permanent: true);
   
-  // Initialize GetX dependencies first
-  Get.put(DataProvider(), permanent: true);
-  Get.put(AuthController(), permanent: true);
+  // Initialize Hive
+  await initHive();
+  
+  // Initialize other controllers
+  final authController = Get.put(AuthController(), permanent: true);
   Get.put(ProductController(), permanent: true);
   Get.put(OrderController(), permanent: true);
   
-  // Then initialize Hive
-  await initHive();
+  // Try to restore login session
+  await authController.initializeAuth();
   
   runApp(const InventoryApp());
 }
@@ -790,7 +842,7 @@ Future<void> initHive() async {
   await Hive.openBox<AttendanceLog>('attendance');
   await Hive.openBox('auth');
 
-  // Initialize data
+  // Initialize data using the already registered DataProvider instance
   await Get.find<DataProvider>().initializeData();
 }
 
@@ -800,16 +852,16 @@ class InventoryApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GetMaterialApp(
-      debugShowCheckedModeBanner: false, // Add this line
+      debugShowCheckedModeBanner: false,
       title: 'Inventory Management',
       theme: AppTheme.lightTheme,
       defaultTransition: Transition.cupertino,
       transitionDuration: const Duration(milliseconds: 500),
       initialBinding: BindingsBuilder(() {
-        Get.put(DataProvider());
-        Get.put(AuthController());
-        Get.put(ProductController());
-        Get.put(OrderController());
+        Get.put(DataProvider(), permanent: true);
+        Get.put(AuthController(), permanent: true);
+        Get.put(ProductController(), permanent: true);
+        Get.put(OrderController(), permanent: true);
       }),
       initialRoute: '/login',
       getPages: [
@@ -822,19 +874,31 @@ class InventoryApp extends StatelessWidget {
           name: '/owner', 
           page: () => const OwnerDashboard(),
           transition: Transition.zoom,
+          middlewares: [AuthMiddleware()],
         ),
         GetPage(
           name: '/client', 
           page: () => const ClientDashboard(),
           transition: Transition.zoom,
+          middlewares: [AuthMiddleware()],
         ),
         GetPage(
           name: '/employee', 
           page: () => const EmployeeDashboard(),
           transition: Transition.zoom,
+          middlewares: [AuthMiddleware()],
         ),
       ],
     );
+  }
+}
+
+// Add this middleware class
+class AuthMiddleware extends GetMiddleware {
+  @override
+  RouteSettings? redirect(String? route) {
+    final authController = Get.find<AuthController>();
+    return authController.isLoggedIn.value ? null : const RouteSettings(name: '/login');
   }
 }
 
@@ -851,12 +915,12 @@ class LoginScreen extends GetView<AuthController> {
 
     return Scaffold(
       body: Center(
-        child: SingleChildScrollView( // Add this wrapper
+        child: SingleChildScrollView(
           child: Card(
             margin: const EdgeInsets.all(32),
             child: Container(
-              constraints: const BoxConstraints(maxWidth: 400), // Add constraint
-              padding: const EdgeInsets.all(24), // Reduce padding
+              constraints: const BoxConstraints(maxWidth: 400),
+              padding: const EdgeInsets.all(24),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -902,14 +966,15 @@ class LoginScreen extends GetView<AuthController> {
                   const SizedBox(height: 16),
                   Row(
                     children: [
-                      // Flexible(
-                      //   child: Obx(() => CheckboxListTile(
-                      //     title: const Text('Remember Me'),
-                      //     value: rememberMe.value,
-                      //     onChanged: (value) => rememberMe.value = value!,
-                      //     controlAffinity: ListTileControlAffinity.leading,
-                      //   )),
-                      // ),
+                      Expanded(
+                        child: Obx(() => CheckboxListTile(
+                          title: const Text('Remember Me'),
+                          value: rememberMe.value,
+                          onChanged: (value) => rememberMe.value = value!,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          contentPadding: EdgeInsets.zero,
+                        )),
+                      ),
                       TextButton.icon(
                         onPressed: () => _showNewUserDialog(context),
                         icon: const Icon(Icons.person_add),
@@ -942,7 +1007,7 @@ class LoginScreen extends GetView<AuthController> {
                                   usernameController.text.trim(),
                                   passwordController.text,
                                   selectedRole.value,
-                                  rememberMe.value,
+                                  rememberMe.value, // Pass the remember me value
                                 );
                               } finally {
                                 isLoading.value = false;
@@ -1108,6 +1173,7 @@ class LoginScreen extends GetView<AuthController> {
     );
   }
 }
+
 
 class OwnerDashboard extends StatefulWidget {
   const OwnerDashboard({super.key});
@@ -1350,7 +1416,7 @@ class _OwnerDashboardState extends State<OwnerDashboard> with SingleTickerProvid
                 ),
               ),
             ),
-          );
+            );
           },
         ),
     ));
@@ -1870,6 +1936,7 @@ String _formatDate(DateTime dateTime) {
   }
 }
 
+
 class ClientDashboard extends StatefulWidget {
   const ClientDashboard({super.key});
 
@@ -2064,7 +2131,7 @@ String _formatDate(DateTime dateTime) {
                     children: [
                       Text('Order #${order.id}'),
                       Text(
-                        'Client: ${order.clientName}',
+                        'Date: ${_formatDate(order.date)}',
                         style: const TextStyle(
                           fontSize: 12,
                           color: Colors.grey,
@@ -2095,7 +2162,6 @@ String _formatDate(DateTime dateTime) {
                 ),
               ],
             ),
-            subtitle: Text(_formatDate(order.date)),
             children: [
               Padding(
                 padding: const EdgeInsets.all(16),
