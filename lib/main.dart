@@ -379,9 +379,14 @@ class AuthController extends GetxController {
             savedUserData['password']; // Store encrypted in production
         final role = savedUserData['role'];
         final rememberMe = savedUserData['rememberMe'] ?? false;
+        final isLoggedOut = savedUserData['isLoggedOut'] ?? false;
 
-        if (!rememberMe) {
-          await authBox.clear();
+        // If explicitly logged out or Remember Me is not checked, don't auto-login
+        if (!rememberMe || isLoggedOut) {
+          // For security, clear any saved data if Remember Me is unchecked
+          if (!rememberMe) {
+            await authBox.clear();
+          }
           isLoading.value = false;
           return;
         }
@@ -446,13 +451,14 @@ class AuthController extends GetxController {
             'password': password, // Encrypt this in production
             'role': role,
             'rememberMe': rememberMe,
+            'isLoggedOut': false, // Reset the logged out state
           });
         } else {
           // Clear any previously saved data
           await authBox.clear();
         }
 
-        if (role == 'Owner' || role == 'Employee') {
+        if (role == 'Owner' || role == 'Employee' || role == 'Client') {
           await dataProvider.logAttendance(user);
         }
 
@@ -481,21 +487,29 @@ class AuthController extends GetxController {
     }
   }
 
-  /// Logout method: clears user session and handles rememberMe logic
+  /// Logout method: clears user session and always redirects to login
   Future<void> logout() async {
     try {
       if (!authBox.isOpen) {
         authBox = await Hive.openBox('auth');
       }
 
-      final rememberMe = authBox.get('userData')?['rememberMe'] ?? false;
+      final userData = authBox.get('userData');
+      final rememberMe = userData?['rememberMe'] ?? false;
 
-      // Only clear saved data if Remember Me is false
-      if (!rememberMe) {
+      if (rememberMe) {
+        // If Remember Me is checked, keep credentials but add a logout flag
+        await authBox.put('userData', {
+          ...userData,
+          'isLoggedOut':
+              true, // Add logout flag to force login screen on refresh
+        });
+      } else {
+        // If Remember Me is not checked, clear all saved data
         await authBox.clear();
       }
 
-      // Always clear current user state regardless of rememberMe
+      // Always clear current user state
       currentUser.value = null;
       isLoggedIn.value = false;
 
@@ -1017,8 +1031,9 @@ Future<void> initHive() async {
   if (!Hive.isAdapterRegistered(2)) Hive.registerAdapter(OrderAdapter());
   if (!Hive.isAdapterRegistered(3)) Hive.registerAdapter(OrderItemAdapter());
   if (!Hive.isAdapterRegistered(4)) Hive.registerAdapter(UserAdapter());
-  if (!Hive.isAdapterRegistered(5))
+  if (!Hive.isAdapterRegistered(5)) {
     Hive.registerAdapter(AttendanceLogAdapter());
+  }
 
   // Open boxes
   await Hive.openBox<Product>('products');
