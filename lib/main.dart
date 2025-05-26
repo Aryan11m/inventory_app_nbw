@@ -1520,6 +1520,8 @@ class _OwnerDashboardState extends State<OwnerDashboard>
                       child: Stack(
                         children: [
                           Container(
+                            width: double.infinity,
+                            height: 165,
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(24),
                               gradient: LinearGradient(
@@ -1544,7 +1546,7 @@ class _OwnerDashboardState extends State<OwnerDashboard>
                                       ),
                                       decoration: BoxDecoration(
                                         borderRadius: BorderRadius.circular(12),
-                                        color: Colors.white.withAlpha(38),
+                                        color: Colors.white.withAlpha(0),
                                       ),
                                       child: Text(
                                         product.name,
@@ -1571,26 +1573,26 @@ class _OwnerDashboardState extends State<OwnerDashboard>
                                   const SizedBox(height: 8),
                                   Container(
                                     padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 14,
+                                      horizontal: 10,
+                                      vertical: 10,
                                     ),
                                     decoration: BoxDecoration(
                                       borderRadius: BorderRadius.circular(16),
-                                      color: Colors.white.withAlpha(51),
+                                      color: Colors.white.withAlpha(50),
                                     ),
                                     child: Row(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
                                         Icon(
                                           Icons.inventory_2_outlined,
-                                          size: 26,
+                                          size: 16,
                                           color: Colors.white.withAlpha(230),
                                         ),
                                         const SizedBox(width: 4),
                                         Text(
                                           'Stock: ${product.stock}',
                                           style: TextStyle(
-                                            fontSize: 20,
+                                            fontSize: 15,
                                             color: Colors.white.withAlpha(230),
                                           ),
                                         ),
@@ -1598,26 +1600,26 @@ class _OwnerDashboardState extends State<OwnerDashboard>
                                     ),
                                   ),
                                   const SizedBox(height: 8),
-                                  SizedBox(width: double.infinity, height: 20
-                                      // child: ElevatedButton.icon(
-                                      //   onPressed: () => orderController.addToCart(product),
-                                      //   icon: const Icon(Icons.add_shopping_cart, size: 16),
-                                      //   label: const Text('Add to Cart'),
-                                      //   style: ElevatedButton.styleFrom(
-                                      //     foregroundColor: Colors.indigo,
-                                      //     backgroundColor: Colors.white,
-                                      //     padding: const EdgeInsets.symmetric(
-                                      //       horizontal: 12,
-                                      //       vertical: 8,
-                                      //     ),
-                                      //     textStyle: const TextStyle(
-                                      //       fontSize: 14,
-                                      //       fontWeight: FontWeight.bold,
-                                      //     ),
-                                      //   ),
-                                      // ),
+                                  // SizedBox(width: double.infinity, height: 20
+                                  // child: ElevatedButton.icon(
+                                  //   onPressed: () => orderController.addToCart(product),
+                                  //   icon: const Icon(Icons.add_shopping_cart, size: 16),
+                                  //   label: const Text('Add to Cart'),
+                                  //   style: ElevatedButton.styleFrom(
+                                  //     foregroundColor: Colors.indigo,
+                                  //     backgroundColor: Colors.white,
+                                  //     padding: const EdgeInsets.symmetric(
+                                  //       horizontal: 12,
+                                  //       vertical: 8,
+                                  //     ),
+                                  //     textStyle: const TextStyle(
+                                  //       fontSize: 14,
+                                  //       fontWeight: FontWeight.bold,
+                                  //     ),
+                                  //   ),
+                                  // ),
 
-                                      )
+                                  // )
                                 ],
                               ),
                             ),
@@ -1631,12 +1633,12 @@ class _OwnerDashboardState extends State<OwnerDashboard>
                               height: 32,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                color: Colors.white.withAlpha(51),
+                                // color: Colors.white.withAlpha(51),
                               ),
                               child: IconButton(
                                 padding: EdgeInsets.zero,
                                 icon: const Icon(
-                                  Icons.delete_outline,
+                                  Icons.delete,
                                   size: 18,
                                   color: Colors.white,
                                 ),
@@ -2510,7 +2512,7 @@ class _ClientDashboardState extends State<ClientDashboard>
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
                     Text(
-                      '\$${orderController.cartTotal.toStringAsFixed(2)}',
+                      '${orderController.cartTotal.toStringAsFixed(2)} Rs',
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
                         color: Colors.green,
