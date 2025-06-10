@@ -3,8 +3,8 @@ import 'package:flutter_staggered_animations/flutter_staggered_animations.dart';
 import 'package:get/get.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'dart:async';
-import 'package:shimmer/shimmer.dart';
-import 'package:animations/animations.dart';
+// import 'package:shimmer/shimmer.dart';
+// import 'package:animations/animations.dart';
 import 'theme.dart';
 import 'package:logging/logging.dart';
 part 'main.g.dart';
@@ -2684,7 +2684,7 @@ class _EmployeeDashboardState extends State<EmployeeDashboard> {
               ),
             );
           },
-        ));
+      );
   }
 
   Color _getStatusColor(OrderStatus status) {
